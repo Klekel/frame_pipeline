@@ -1,7 +1,7 @@
 module frame_pipeline_top #(
     parameter  logic       FRAME_WIDTH             = 128,
     parameter  logic       FRAME_HIGHT             = 128,
-    parameter  logic [3:0] MATRIX_COEF      [3][3] = {'{-1, -1, -1}, '{-1, 8, -1},  '{-1, -1, -1}},
+    parameter  logic [3:0] MATRIX_COEF      [3][3] = '{'{-1, -1, -1}, '{-1, 8, -1},  '{-1, -1, -1}},
     localparam             FRAME_WIDTH_BITS        = $clog2(FRAME_WIDTH),
     localparam             FRAME_HIGHT_BITS        = $clog2(FRAME_HIGHT)
 )(
@@ -28,9 +28,18 @@ assign gray_1 = (red_i >> 2 + red_i >> 5) + (green_i >> 1 + green_i >> 4) + (blu
 
 // =============== WR_ADDR_LOGIC ===============
 
-logic [3:0] wr_en;
+logic [3                  :0] wr_en;
 logic [FRAME_WIDTH_BITS-1 :0] wr_addr_ff;
 logic [FRAME_WIDTH_BITS-1 :0] wr_addr_next;
+logic [7                  :0] mem_data    [3:0]; 
+logic [7                  :0] row_data    [2:0]; 
+logic [7                  :0] shift_reg_0 [2:0]; 
+logic [7                  :0] shift_reg_1 [2:0]; 
+logic [7                  :0] shift_reg_2 [2:0]; 
+logic [3                  :0] rd_en;
+logic [3                  :0] rd_en_masked;
+logic [FRAME_WIDTH_BITS-1 :0] rd_addr_ff;
+logic [FRAME_WIDTH_BITS-1 :0] rd_addr_next;
 
 always_ff @(posedge clk_i or negedge rstn_i) begin
     if   (!rstn_i) wr_en <= 1;
@@ -42,40 +51,35 @@ assign wr_addr_next = wr_addr_ff + 1;
 
 always_ff @(posedge clk_i or negedge rstn_i) begin
     if   (!rstn_i) wr_addr_ff <= '0;
-    if   (hs_i)      wr_addr_ff <= '0;
+    if   (hs_i)    wr_addr_ff <= '0;
     else           wr_addr_ff <= wr_addr_next;
 end
 
 // =============================================
 
-logic [3:0] 3_lines_filled;
+logic [3:0] three_lines_filled;
 
 always_ff @(posedge clk_i or negedge rstn_i) begin
-    if   (!rstn_i) 3_lines_filled <= 4'd1;
-    else if (vs_i) 3_lines_filled <= 4'd9;
-    else if (hs_i) 3_lines_filled <= {1,3_lines_filled[3:1]};
+    if   (!rstn_i) three_lines_filled <= 4'd1;
+    else if (vs_i) three_lines_filled <= 4'd9;
+    else if (hs_i) three_lines_filled <= {1'b1,three_lines_filled[3:1]};
 end
 
 // =============== RD_ADDR_LOGIC ===============
 
-logic [3                  :0] rd_en;
-logic [3                  :0] rd_en_masked;
-logic [FRAME_WIDTH_BITS-1 :0] rd_addr_ff;
-logic [FRAME_WIDTH_BITS-1 :0] rd_addr_next;
-
 always_ff @(posedge clk_i or negedge rstn_i) begin
-    if      (!rstn_i)                  rd_en <= 4'd7;
-    else if (vs_i)                     rd_en <= 4'd7;
-    else if (hs_i & 3_lines_filled[3]) rd_en <= {rd_en[0],rd_en[3:1]};
+    if      (!rstn_i)                      rd_en <= 4'd7;
+    else if (vs_i)                         rd_en <= 4'd7;
+    else if (hs_i & three_lines_filled[3]) rd_en <= {rd_en[0],rd_en[3:1]};
 end
 
-assign rd_en_masked = rd_en & 3_lines_filled[3];
+assign rd_en_masked = rd_en & three_lines_filled[3];
 
-assign rd_addr_next = rd_addr_ff + 3_lines_filled[3];
+assign rd_addr_next = rd_addr_ff + three_lines_filled[3];
 
 always_ff @(posedge clk_i or negedge rstn_i) begin
     if   (!rstn_i) rd_addr_ff <= '0;
-    if   (hs_i)      rd_addr_ff <= '0;
+    if   (hs_i)    rd_addr_ff <= '0;
     else           rd_addr_ff <= rd_addr_next;
 end
 
@@ -83,15 +87,25 @@ end
 
 // =============== MEM_INSTANCE ===============
 
+genvar i;
+for(i=0;i<4;i++) begin
+    dual_port_mem #(
+        .DATA_WIDTH ( 8 ),
+        .RAM_DEPTH  ( FRAME_WIDTH )
+    ) i_line_buf (
+    .clk_i     ( clk_i       ),
+    .wr_addr_i ( wr_addr_ff  ),
+    .data_i    ( gray_1      ),
+    .wr_en_i   ( wr_en[i]    ),
+    .rd_en_i   ( rd_en[i]    ),
+    .rd_addr_i ( rd_addr_ff  ),
+    .data_o    ( mem_data[i] )
+    );
+end
+
 // =============================================
 
 // =============== MATRIX_MULT ===============
-
-logic [7:0] mem_data [3:0]; 
-logic [7:0] row_data [2:0]; 
-logic [7:0] shift_reg_0 [2:0]; 
-logic [7:0] shift_reg_1 [2:0]; 
-logic [7:0] shift_reg_2 [2:0]; 
 
 always_comb begin
     case(rd_en)
@@ -165,7 +179,7 @@ logic [7:0] vs_cnt_next;
 always_ff @(posedge clk_i or negedge rstn_i) begin
     if      (!rstn_i)           valid_shift_reg <= 1;
     else if (hs_i)              valid_shift_reg <= 1;
-    else if (3_lines_filled[3]) valid_shift_reg <= {valid_shift_reg[3:1], 1'b1};
+    else if (three_lines_filled[3]) valid_shift_reg <= {valid_shift_reg[3:1], 1'b1};
 end
 
 assign hs_cnt_next = hs_cnt_ff + valid_shift_reg[3];
