@@ -6,6 +6,7 @@ TB_DIR      := $(CURDIR)/tb
 # --- Исходные файлы -----------------------------------------------------------
 
 RTL_FILES := \
+	$(RTL_DIR)/pipeline_pkg.sv \
 	$(RTL_DIR)/dual_port_mem.sv \
 	$(RTL_DIR)/frame_pipeline_top.sv \
 
