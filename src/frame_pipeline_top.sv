@@ -1,18 +1,18 @@
 module frame_pipeline_top #(
-    parameter  int         FRAME_WIDTH             = 128,
-    parameter  int         FRAME_HIGHT             = 128,
-    parameter  logic [4:0] MATRIX_COEF      [3][3] = '{'{-1, -1, -1}, '{-1, 8, -1},  '{-1, -1, -1}},
-    localparam             FRAME_WIDTH_BITS        = $clog2(FRAME_WIDTH),
-    localparam             FRAME_HIGHT_BITS        = $clog2(FRAME_HIGHT)
+    parameter  int                FRAME_WIDTH             = 128,
+    parameter  int                FRAME_HIGHT             = 128,
+    parameter  logic signed [4:0] MATRIX_COEF      [3][3] = '{'{-1, -1, -1}, '{-1, 8, -1},  '{-1, -1, -1}},
+    localparam                    FRAME_WIDTH_BITS        = $clog2(FRAME_WIDTH),
+    localparam                    FRAME_HIGHT_BITS        = $clog2(FRAME_HIGHT)
 )(
-input  logic        clk_i,
-input  logic        rstn_i,
-input  logic        hs_i,
-input  logic        vs_i,
-input  logic [7: 0] red_i,
-input  logic [7: 0] green_i,
-input  logic [7: 0] blue_i,
-input  logic [19:0] threshold_i,
+input  logic               clk_i,
+input  logic               rstn_i,
+input  logic               hs_i,
+input  logic               vs_i,
+input  logic        [7: 0] red_i,
+input  logic        [7: 0] green_i,
+input  logic        [7: 0] blue_i,
+input  logic signed [19:0] threshold_i,
 
 output logic        hs_o,
 output logic        vs_o,
@@ -39,7 +39,6 @@ logic [7                  :0] shift_reg_2 [2:0];
 logic [FRAME_WIDTH_BITS-1 :0] rd_addr_ff;
 logic [FRAME_WIDTH_BITS-1 :0] rd_addr_next;
 logic [3                  :0] rd_en;
-// logic [3                  :0] rd_en_masked;
 
 always_ff @(posedge clk_i or negedge rstn_i) begin
     if   (!rstn_i) wr_en <= 1;
@@ -73,13 +72,11 @@ always_ff @(posedge clk_i or negedge rstn_i) begin
     else if (hs_i & three_lines_filled[3]) rd_en <= {rd_en[2:0],rd_en[3]};
 end
 
-// assign rd_en_masked = (rd_en & {4{three_lines_filled[3]}}) | {4{hs_i}};
 
-assign rd_addr_next = rd_addr_ff + three_lines_filled[3];
+assign rd_addr_next = (three_lines_filled[3]) ? rd_addr_ff + 1 : (three_lines_filled[2] && hs_i) ? rd_addr_ff + 1 : rd_addr_ff;
 
 always_ff @(posedge clk_i or negedge rstn_i) begin
     if   (!rstn_i) rd_addr_ff <= '0;
-    else if (hs_i) rd_addr_ff <= '0;
     else           rd_addr_ff <= rd_addr_next;
 end
 
@@ -138,26 +135,26 @@ always_comb begin
 end
 
 always_ff @(posedge clk_i)
-    if (three_lines_filled[3]) shift_reg_0 <= {shift_reg_0[1:0], row_data[0]};
+    if (three_lines_filled[3]) shift_reg_0 <= {row_data[0], shift_reg_0[2:1]};
 
 always_ff @(posedge clk_i)
-    if (three_lines_filled[3]) shift_reg_1 <= {shift_reg_1[1:0], row_data[1]};
+    if (three_lines_filled[3]) shift_reg_1 <= {row_data[1], shift_reg_1[2:1]};
 
 always_ff @(posedge clk_i)
-    if (three_lines_filled[3]) shift_reg_2 <= {shift_reg_2[1:0], row_data[2]};
+    if (three_lines_filled[3]) shift_reg_2 <= {row_data[2], shift_reg_2[2:1]};
 
-logic [11:0] row_0_mult [2:0];
-logic [11:0] row_1_mult [2:0];
-logic [11:0] row_2_mult [2:0];
+logic signed [11:0] row_0_mult [2:0];
+logic signed [11:0] row_1_mult [2:0];
+logic signed [11:0] row_2_mult [2:0];
 
-logic [13:0] row_sum    [2:0];
-logic [15:0] total_sum;
+logic signed [13:0] row_sum    [2:0];
+logic signed [15:0] total_sum;
 
 always_comb begin
     for(int i=0; i<3 ; i++) begin
-        row_0_mult[i] = shift_reg_0[i] * MATRIX_COEF[0][i];
-        row_1_mult[i] = shift_reg_1[i] * MATRIX_COEF[1][i];
-        row_2_mult[i] = shift_reg_2[i] * MATRIX_COEF[2][i];
+        row_0_mult[i] = $signed(shift_reg_0[i]) * $signed(MATRIX_COEF[0][i]);
+        row_1_mult[i] = $signed(shift_reg_1[i]) * $signed(MATRIX_COEF[1][i]);
+        row_2_mult[i] = $signed(shift_reg_2[i]) * $signed(MATRIX_COEF[2][i]);
     end
 end
 
@@ -171,14 +168,14 @@ assign total_sum = row_sum[0] + row_sum[1] + row_sum[2];
 // =============== SYNC_LOGIC ===============
 
 logic [3:0] valid_shift_reg;
-logic [7:0] hs_cnt_ff;
-logic [7:0] hs_cnt_next;
-logic [7:0] vs_cnt_ff;
-logic [7:0] vs_cnt_next;
+logic [FRAME_WIDTH_BITS:0] hs_cnt_ff;
+logic [FRAME_WIDTH_BITS:0] hs_cnt_next;
+logic [FRAME_HIGHT_BITS:0] vs_cnt_ff;
+logic [FRAME_HIGHT_BITS:0] vs_cnt_next;
 
 always_ff @(posedge clk_i or negedge rstn_i) begin
     if      (!rstn_i)               valid_shift_reg <= 1;
-    else if (hs_o)                  valid_shift_reg <= 1;
+    else if (hs_o)                  valid_shift_reg <= 3;
     else if (three_lines_filled[3]) valid_shift_reg <= {valid_shift_reg[2:0], 1'b1};
 end
 
@@ -202,7 +199,7 @@ end
 assign hs_o    = hs_cnt_next == FRAME_WIDTH - 2;
 assign vs_o    = vs_cnt_next == FRAME_HIGHT - 2;
 assign valid_o = valid_shift_reg[3];
-assign y_o     = ({16{valid_shift_reg[3]}} & total_sum) > threshold_i;
+assign y_o     = $signed(({16{valid_shift_reg[3]}} & total_sum)) > threshold_i;
 // =============================================
 
 endmodule

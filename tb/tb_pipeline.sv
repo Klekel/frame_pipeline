@@ -7,7 +7,7 @@ logic       vs_i      = 0;
 logic [7:0] red       = 0;
 logic [7:0] green     = 0;
 logic [7:0] blue      = 0;
-logic [7:0] threshold = 12;
+logic [19:0] threshold = 120;
 
 logic hs_o;
 logic vs_o;
@@ -37,45 +37,102 @@ frame_pipeline_top
 .valid_o     ( valid_o   )
 );
 
-    // ---------------------------------------------------------------
-    // Буферы изображения (память кадра)
-    // ---------------------------------------------------------------
+// ---------------------------------------------------------------
+// Загрузка одного канала изображения из файла channel_*.txt
+// Формат: числа 0..255 через пробел/перенос строки (N×N штук)
+// ---------------------------------------------------------------
+task automatic load_channel(input string fname, ref logic [7:0] img[FRAME_HIGHT][FRAME_WIDTH]);
+    integer fd;
+    integer val;
+    int     y, x_idx;
+    int     r;
+
+    fd = $fopen(fname, "r");
+    if (fd == 0) begin
+        $display("ERROR: Cannot open %s", fname);
+        $finish;
+    end
+
+    for (y = 0; y < FRAME_HIGHT; y++) begin
+        for (x_idx = 0; x_idx < FRAME_WIDTH; x_idx++) begin
+            r = $fscanf(fd, "%d", val);
+            if (r != 1) begin
+                $display("ERROR: %s: EOF/short read at row %0d col %0d", fname, y, x_idx);
+                $fclose(fd);
+                $finish;
+            end
+            if (val < 0 || val > 255) begin
+                $display("ERROR: %s: value %0d out of range at row %0d col %0d",
+                         fname, val, y, x_idx);
+                $fclose(fd);
+                $finish;
+            end
+            img[y][x_idx] = val[7:0];
+        end
+    end
+
+    $fclose(fd);
+    $display("Loaded %s (%0d x %0d)", fname, FRAME_WIDTH, FRAME_HIGHT);
+endtask
+
     logic [7:0] img_r [0:FRAME_HIGHT-1][0:FRAME_WIDTH-1];
     logic [7:0] img_g [0:FRAME_HIGHT-1][0:FRAME_WIDTH-1];
     logic [7:0] img_b [0:FRAME_HIGHT-1][0:FRAME_WIDTH-1];
 
     logic       out_mask [0:FRAME_HIGHT-3][0:FRAME_WIDTH-3];
 
-    // Заполнение «шахматкой» — удобно для проверки границ
-    task automatic init_image_checker();
-        for (int y = 0; y < FRAME_HIGHT; y++)
-            for (int x = 0; x < FRAME_WIDTH; x++) begin
-                if (((x/4) + (y/4)) % 2 == 0) begin
-                    img_r[y][x] = 8'h0f;
-                    img_g[y][x] = 8'h0f;
-                    img_b[y][x] = 8'h0f;
-                end else begin
-                    img_r[y][x] = 8'h00;
-                    img_g[y][x] = 8'h00;
-                    img_b[y][x] = 8'h00;
-                end
-            end
-    endtask
+task automatic init_image_checker();
 
-    // ---------------------------------------------------------------
-    // Драйвер пикселей: подаёт изображение построчно
-    //   hs_i — импульс 1 такт в конце каждой строки
-    //   vs_i — импульс 1 такт в конце кадра
-    // ---------------------------------------------------------------
+    int     fd;
+    int     y, x_idx;
+
+    // // 1) Заполняем массивы (ваш исходный код)
+    // for (int y = 0; y < FRAME_HIGHT; y++)
+    //     for (int x_idx = 0; x_idx < FRAME_WIDTH; x_idx++) begin
+    //         if (((x_idx/8) + (y/8)) % 2 == 0) begin
+    //             img_r[y][x_idx] = $urandom();
+    //             img_g[y][x_idx] = $urandom();
+    //             img_b[y][x_idx] = $urandom();
+    //         end else begin
+    //             img_r[y][x_idx] = $urandom();
+    //             img_g[y][x_idx] = $urandom();
+    //             img_b[y][x_idx] = $urandom();
+    //         end
+    //     end
+
+    load_channel("C:/univer/RTL_prototype/lab2/etc/channel_R.txt", img_r);
+    load_channel("C:/univer/RTL_prototype/lab2/etc/channel_G.txt", img_g);
+    load_channel("C:/univer/RTL_prototype/lab2/etc/channel_B.txt", img_b);
+
+    fd = $fopen("C:/univer/RTL_prototype/lab2/sim_output/r_input.txt", "w");
+    if (fd == 0) begin
+        $display("ERROR: Cannot open %s for writing", "C:/univer/RTL_prototype/lab2/sim_output/r_input.txt");
+        $finish;
+    end
+
+    for (y = 0; y < FRAME_HIGHT; y++) begin
+        for (x_idx = 0; x_idx < FRAME_WIDTH; x_idx++) begin
+            $fwrite(fd, "%0d", img_r[y][x_idx]);
+            // Пробел между числами, но не после последнего в строке
+            if (x_idx != FRAME_WIDTH - 1)
+                $fwrite(fd, " ");
+        end
+        $fwrite(fd, "\n");   // конец строки изображения
+    end
+
+    $fflush(fd);
+    $fclose(fd);             // ОБЯЗАТЕЛЬНО: без этого XSIM может оставить файл пустым
+endtask
+
     task automatic drive_frame();
         for (int y = 0; y < FRAME_HIGHT; y++) begin
             for (int x = 0; x < FRAME_WIDTH; x++) begin
-                red   <= img_r[y][x];
-                green <= img_g[y][x];
-                blue  <= img_b[y][x];
-                if (x == FRAME_WIDTH - 1) begin // --- конец строки: hs_i ---
+                red   <= img_r[x][y];
+                green <= img_g[x][y];
+                blue  <= img_b[x][y];
+                if (x == FRAME_WIDTH - 1) begin
                   hs_i <= 1'b1;
-                  if (y == FRAME_HIGHT - 1) // --- конец кадра: vs_i ---
+                  if (y == FRAME_HIGHT - 1)
                     vs_i <= 1'b1;
                 end
                 @(posedge clk);
@@ -83,104 +140,74 @@ frame_pipeline_top
                 vs_i <= 1'b0;
             end
         end
-
-        // сброс входов в ноль
         red <= 0; green <= 0; blue <= 0;
     endtask
 
-    // ---------------------------------------------------------------
-    // Приёмник выходной маски: ловит y_o когда valid_o=1,
-    // восстанавливает координаты по счётчикам hs_o/vs_o.
-    //   hs_o — 1 такт в конце каждой выходной строки
-    //   vs_o — 1 такт в конце выходного кадра
-    // ---------------------------------------------------------------
-    int out_x = 0;
-    int out_y = 0;
-    int cnt_y = 0;
+int out_x = 0;
+int out_y = 0;
+int cnt_y = 0;
 
-    always @(posedge clk) begin
-        if (!rst_n) begin
-            out_x <= 0; out_y <= 0;
-        end else if (vs_o) begin
-            // конец кадра — сброс координат
-            out_y <= 0; out_x <= 0;
-        end else if (hs_o) begin
-            // конец строки — переход к следующей строке
-            out_x <= 0;
-            out_y <= out_y + 1;
-        end else if (valid_o) begin
-            out_mask[out_y][out_x] <= y_o;
-            out_x <= out_x + 1;
-        end
+localparam int ROWS = FRAME_WIDTH-2; 
+localparam int COLS = FRAME_HIGHT-2; 
+
+integer fd;
+integer frame_cnt = 0;
+integer r, c;
+
+initial begin
+    fd = $fopen("C:/univer/RTL_prototype/lab2/sim_output/out_mask_dump.txt", "w");
+    if (fd == 0) begin
+        $display("Error: Could not open file.");
+        $finish;
     end
+end
 
-    // ---------------------------------------------------------------
-    // Сравнение выходной маски с эталоном (программная свёртка)
-    // ---------------------------------------------------------------
-    task automatic check_output();
-        int errors = 0;
-        int reference;
-        int gray;
-        for (int y = 0; y < FRAME_HIGHT-2; y++) begin
-            for (int x = 0; x < FRAME_WIDTH-2; x++) begin
-                // Эталонная свёртка с матрицей MATRIX_COEF по градациям серого
-                reference = 0;
-                for (int ky = -1; ky <= 1; ky++)
-                    for (int kx = -1; kx <= 1; kx++) begin
-                        int yy = y + ky;
-                        int xx = x + kx;
-                        if (yy < 0 || yy >= FRAME_HIGHT-2 || xx < 0 || xx >= FRAME_WIDTH-2) continue;
-                        gray = (img_r[yy][xx] * 77 + img_g[yy][xx] * 150 + img_b[yy][xx] * 29) >> 8;
-                        reference += gray * $signed(MATRIX_COEF[ky+1][kx+1]);
-                    end
-                if ((reference > threshold) !== out_mask[y][x]) begin
-                    if (errors < 100)
-                        $display("[TB] MISMATCH (%0d,%0d): reference=%0d out=%b",
-                                 y, x, reference, out_mask[y][x]);
-                    errors++;
-                end
+always @(posedge clk) begin
+    if (!rst_n) begin
+        out_x <= 0; out_y <= 0;
+    end else if (vs_o) begin
+        out_mask[out_y][out_x] = y_o;
+
+        for (r = 0; r < ROWS; r++) begin      
+            for (c = 0; c < COLS; c++) begin  
+                $fwrite(fd, "%0d", out_mask[c][r]); 
             end
+            $fwrite(fd, "\n");
         end
-        if (errors == 0)
-            $display("[TB] PASS — все %0d пикселей совпали", FRAME_WIDTH*FRAME_HIGHT);
-        else
-            $display("[TB] FAIL — %0d/%0d несовпадений", errors, FRAME_WIDTH*FRAME_HIGHT);
-    endtask
+        $fwrite(fd, "\n");
+        $fflush(fd);        
+        frame_cnt = frame_cnt + 1;
 
-    // ---------------------------------------------------------------
-    // Основной сценарий
-    // ---------------------------------------------------------------
+        out_y <= 0; out_x <= 0;
+    end else if (hs_o) begin
+        out_mask[out_y][out_x] <= y_o;
+        out_x <= 0;
+        out_y <= out_y + 1;
+    end else if (valid_o) begin
+        out_mask[out_y][out_x] <= y_o;
+        out_x <= out_x + 1;
+    end
+end
+
     initial begin
         repeat (1) @(posedge clk);
         rst_n <= 0;
         repeat (5) @(posedge clk);
         rst_n <= 1;
 
-        // 2. Изображение: либо из файла, либо шахматка
-        // load_image("img64.mem");     // раскомментируйте, если файл есть
         init_image_checker();
 
-        // 3. Подать кадр
-          drive_frame();
-        fork
-          drive_frame();
-        join_none
-
-        // 4. Подождать, пока пайплайн опустошится
-        //    (3 строки по FRAME_WIDTH тактов + запас)
-        repeat (FRAME_WIDTH * 10 + 20) @(posedge clk);
-
-        // 5. Проверка
-        check_output();
+        drive_frame();
+        wait(vs_o);
+        repeat (6) @(posedge clk);
 
         $finish;
     end
 
-    // Таймаут
-    initial begin
-        #(FRAME_WIDTH * FRAME_HIGHT * 20 * 4);
-        $display("[TB] TIMEOUT");
-        $finish;
-    end
+   initial begin
+       #(FRAME_WIDTH * FRAME_HIGHT * 20 * 4);
+       $display("[TB] TIMEOUT");
+       $finish;
+   end
 
 endmodule
